@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="ko">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Webhook Inspector</title>
+	<style>
+		:root {
+			--bg: #0f1419;
+			--panel: #171d26;
+			--panel-2: #1e2530;
+			--border: #2a3340;
+			--text: #e6edf3;
+			--muted: #8b97a5;
+			--accent: #4c9aff;
+			--get: #3fb950;
+			--post: #4c9aff;
+			--put: #d29922;
+			--delete: #f85149;
+			--other: #8b949e;
+		}
+		* { box-sizing: border-box; }
+		html, body { height: 100%; margin: 0; }
+		body {
+			font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Malgun Gothic", sans-serif;
+			background: var(--bg); color: var(--text);
+			display: flex; flex-direction: column; height: 100vh;
+		}
+		header {
+			display: flex; align-items: center; gap: 16px;
+			padding: 12px 20px; background: var(--panel);
+			border-bottom: 1px solid var(--border); flex: none;
+		}
+		header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+		header .count { color: var(--muted); font-size: 13px; }
+		header .spacer { flex: 1; }
+		header label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+		button {
+			background: var(--panel-2); color: var(--text);
+			border: 1px solid var(--border); border-radius: 6px;
+			padding: 6px 12px; font-size: 13px; cursor: pointer;
+		}
+		button:hover { background: #262e3a; }
+		button.danger:hover { background: #3a1d1d; border-color: var(--delete); color: var(--delete); }
+		.hint {
+			padding: 8px 20px; background: var(--panel-2); color: var(--muted);
+			font-size: 12px; border-bottom: 1px solid var(--border); flex: none;
+		}
+		.hint code { color: var(--accent); }
+		main { display: flex; flex: 1; min-height: 0; }
+		#list {
+			width: 340px; flex: none; overflow-y: auto;
+			border-right: 1px solid var(--border); background: var(--panel);
+		}
+		.item {
+			padding: 10px 16px; border-bottom: 1px solid var(--border);
+			cursor: pointer; display: flex; flex-direction: column; gap: 4px;
+		}
+		.item:hover { background: var(--panel-2); }
+		.item.active { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
+		.item .row1 { display: flex; align-items: center; gap: 8px; }
+		.item .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.item .meta { color: var(--muted); font-size: 12px; }
+		.badge {
+			font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px;
+			color: #0f1419; flex: none; letter-spacing: .3px;
+		}
+		.badge.GET { background: var(--get); }
+		.badge.POST { background: var(--post); }
+		.badge.PUT { background: var(--put); }
+		.badge.PATCH { background: var(--put); }
+		.badge.DELETE { background: var(--delete); }
+		.badge.OTHER { background: var(--other); }
+		#detail { flex: 1; overflow-y: auto; padding: 20px 24px; min-width: 0; }
+		.empty { color: var(--muted); text-align: center; margin-top: 80px; }
+		.detail-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+		.detail-head .path { font-size: 16px; font-weight: 600; word-break: break-all; }
+		.detail-time { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+		h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 22px 0 8px; }
+		table { width: 100%; border-collapse: collapse; }
+		table td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; word-break: break-all; }
+		table td.k { color: var(--accent); width: 220px; font-weight: 500; }
+		pre {
+			background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+			padding: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+			margin: 0; font: 13px/1.5 "SFMono-Regular", Consolas, monospace;
+		}
+		.truncated { color: var(--put); font-size: 12px; margin-top: 6px; }
+		.empty-body { color: var(--muted); font-style: italic; }
+	</style>
+</head>
+<body>
+	<header>
+		<h1>Webhook Inspector</h1>
+		<span class="count" id="count">0건</span>
+		<span class="spacer"></span>
+		<label><input type="checkbox" id="auto" checked> 자동 새로고침</label>
+		<button id="refresh">새로고침</button>
+		<button id="clear" class="danger">비우기</button>
+	</header>
+	<div class="hint">
+		요청을 보내보세요: <code>curl -X POST http://localhost:8080/webhook/test -d 'hello'</code> — 아무 경로/메서드나 <code>/webhook/**</code> 로 받습니다.
+	</div>
+	<main>
+		<div id="list"></div>
+		<div id="detail"><div class="empty">요청 대기 중…</div></div>
+	</main>
+
+	<script>
+		var selectedId = null;
+		var lastSignature = "";
+		var current = [];
+
+		function esc(s) {
+			return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+				return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+			});
+		}
+
+		function badgeClass(method) {
+			return ["GET", "POST", "PUT", "PATCH", "DELETE"].indexOf(method) >= 0 ? method : "OTHER";
+		}
+
+		function fmtTime(iso) {
+			try { return new Date(iso).toLocaleTimeString(); } catch (e) { return iso; }
+		}
+
+		function fmtBytes(n) {
+			if (n < 1024) return n + " B";
+			if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+			return (n / 1048576).toFixed(1) + " MB";
+		}
+
+		function renderList() {
+			var list = document.getElementById("list");
+			if (current.length === 0) {
+				list.innerHTML = '<div class="empty" style="margin-top:40px">아직 요청 없음</div>';
+				return;
+			}
+			var html = "";
+			for (var i = 0; i < current.length; i++) {
+				var r = current[i];
+				var active = r.id === selectedId ? " active" : "";
+				html +=
+					'<div class="item' + active + '" data-id="' + esc(r.id) + '">' +
+						'<div class="row1">' +
+							'<span class="badge ' + badgeClass(r.method) + '">' + esc(r.method) + '</span>' +
+							'<span class="path">' + esc(r.path) + '</span>' +
+						'</div>' +
+						'<span class="meta">' + fmtTime(r.receivedAt) + ' · ' + fmtBytes(r.bytesReceived) + '</span>' +
+					'</div>';
+			}
+			list.innerHTML = html;
+			var items = list.querySelectorAll(".item");
+			for (var j = 0; j < items.length; j++) {
+				items[j].addEventListener("click", function () {
+					selectedId = this.getAttribute("data-id");
+					renderList();
+					renderDetail();
+				});
+			}
+		}
+
+		function prettyBody(body, contentType) {
+			if (!body) return '<span class="empty-body">(빈 본문)</span>';
+			var text = body;
+			if (contentType && contentType.indexOf("json") >= 0) {
+				try { text = JSON.stringify(JSON.parse(body), null, 2); } catch (e) { /* keep raw */ }
+			}
+			return "<pre>" + esc(text) + "</pre>";
+		}
+
+		function findById(id) {
+			for (var i = 0; i < current.length; i++) { if (current[i].id === id) return current[i]; }
+			return null;
+		}
+
+		function renderDetail() {
+			var detail = document.getElementById("detail");
+			var r = selectedId ? findById(selectedId) : (current.length ? current[0] : null);
+			if (!r) { detail.innerHTML = '<div class="empty">요청 대기 중…</div>'; return; }
+
+			var rows =
+				row("메서드", r.method) +
+				row("경로", r.path) +
+				(r.query ? row("쿼리", r.query) : "") +
+				row("원격 주소", r.remoteAddr) +
+				row("Content-Type", r.contentType || "(없음)") +
+				row("바이트 수", fmtBytes(r.bytesReceived) + " (" + r.bytesReceived + " B)") +
+				row("수신 시각", new Date(r.receivedAt).toLocaleString());
+
+			var headerRows = "";
+			var keys = Object.keys(r.headers || {});
+			for (var i = 0; i < keys.length; i++) {
+				headerRows += '<tr><td class="k">' + esc(keys[i]) + '</td><td>' + esc(r.headers[keys[i]]) + '</td></tr>';
+			}
+
+			detail.innerHTML =
+				'<div class="detail-head">' +
+					'<span class="badge ' + badgeClass(r.method) + '">' + esc(r.method) + '</span>' +
+					'<span class="path">' + esc(r.path) + '</span>' +
+				'</div>' +
+				'<div class="detail-time">' + new Date(r.receivedAt).toLocaleString() + '</div>' +
+				'<h2>요약</h2><table>' + rows + '</table>' +
+				'<h2>헤더</h2><table>' + (headerRows || '<tr><td class="k">(없음)</td><td></td></tr>') + '</table>' +
+				'<h2>본문</h2>' + prettyBody(r.body, r.contentType) +
+				(r.bodyTruncated ? '<div class="truncated">⚠ 본문이 64KB에서 잘렸습니다 (전체: ' + fmtBytes(r.bytesReceived) + ')</div>' : '');
+		}
+
+		function row(k, v) {
+			return '<tr><td class="k">' + esc(k) + '</td><td>' + esc(v) + '</td></tr>';
+		}
+
+		function load() {
+			return fetch("/api/requests")
+				.then(function (res) { return res.json(); })
+				.then(function (data) {
+					var sig = data.length + ":" + (data[0] ? data[0].seq : 0);
+					current = data;
+					document.getElementById("count").textContent = data.length + "건";
+					if (sig !== lastSignature) {
+						lastSignature = sig;
+						renderList();
+						renderDetail();
+					}
+				})
+				.catch(function () { /* ignore transient poll errors */ });
+		}
+
+		document.getElementById("refresh").addEventListener("click", load);
+		document.getElementById("clear").addEventListener("click", function () {
+			fetch("/api/requests", { method: "DELETE" }).then(function () {
+				selectedId = null; lastSignature = ""; load();
+			});
+		});
+
+		var timer = setInterval(function () {
+			if (document.getElementById("auto").checked) load();
+		}, 2000);
+
+		load();
+	</script>
+</body>
+</html>

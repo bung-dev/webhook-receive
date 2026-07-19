@@ -1,6 +1,6 @@
 # Webhook Receiver
 
-SAP BTP Integration Suite가 호출하는 **리시버 엔드포인트**. 들어온 HTTP 요청을 수신하고 `200 OK`와 수신 확인 JSON을 반환합니다. Spring Security 없이 동작하며, 대용량 페이로드가 들어와도 **바디를 힙에 쌓지 않아** GC 부담이 없습니다.
+SAP BTP Integration Suite가 호출하는 **리시버 엔드포인트** + **인스펙터 UI**. 들어온 HTTP 요청을 수신하고 `200 OK`와 수신 확인 JSON을 반환하며, webhook.site처럼 브라우저에서 요청 내용(메서드·헤더·바디)을 실시간으로 볼 수 있습니다. Spring Security 없이 동작하며, 대용량 페이로드가 들어와도 **바디를 힙에 쌓지 않아** GC 부담이 없습니다.
 
 - **Spring Boot 4.1.0** / **Java 17** / Gradle
 - 인증 없음
@@ -36,11 +36,25 @@ curl -X POST localhost:8080/webhook/receive \
 
 ---
 
+## 인스펙터 UI
+
+브라우저에서 **`http://localhost:8080/`** 에 접속하면 받은 요청들을 실시간으로 볼 수 있습니다 (webhook.site 스타일).
+
+- 왼쪽: 요청 목록 (메서드·경로·시각·크기, 최신순)
+- 오른쪽: 선택한 요청의 상세 — 요약, 헤더, 본문 (JSON은 자동 정렬)
+- 2초마다 자동 새로고침, **비우기** 버튼으로 목록 초기화
+- 최근 **200건**만 유지, 본문은 요청당 **64KB**까지만 표시 (초과 시 잘림 표시)
+
+---
+
 ## 엔드포인트
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| ANY | `/webhook/**` | 모든 HTTP 메서드를 수신하고 `200 OK` + 수신 확인 JSON 반환 |
+| ANY | `/webhook/**` | 모든 HTTP 메서드를 수신하고 `200 OK` + 수신 확인 JSON 반환. 요청은 인스펙터에 기록됨 |
+| GET | `/` | 인스펙터 UI (정적 페이지) |
+| GET | `/api/requests` | 기록된 요청 목록 (JSON, 최신순) |
+| DELETE | `/api/requests` | 기록된 요청 전체 삭제 |
 
 `/webhook/` 아래 경로는 무엇이든 매칭됩니다. 예: `/webhook/receive`, `/webhook/a/b/c`.
 
@@ -83,10 +97,15 @@ curl -X POST localhost:8080/webhook/receive \
 ```
 src/main/java/com/example/webhook/
 ├── WebhookApplication.java   # 부트 진입점
-├── WebhookController.java     # /webhook/** 리시버 (InputStream 드레인)
-└── ReceiptResponse.java       # 수신 확인 응답 레코드
+├── WebhookController.java     # /webhook/** 리시버 (InputStream 드레인 + 캡처)
+├── ReceiptResponse.java       # 수신 확인 응답 레코드
+├── CapturedRequest.java       # 캡처된 요청 모델
+├── RequestStore.java          # 최근 200건 보관 (스레드 안전, 링버퍼)
+└── InspectorController.java    # /api/requests (목록/삭제)
 src/main/resources/
-└── application.properties
+├── application.properties
+└── static/index.html          # 인스펙터 UI
 src/test/java/com/example/webhook/
-└── WebhookControllerTests.java
+├── WebhookControllerTests.java
+└── InspectorControllerTests.java
 ```
